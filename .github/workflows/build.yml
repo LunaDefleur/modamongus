@@ -1,0 +1,77 @@
+name: Build Among Us Mod Dylib
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  THEOS: /Users/runner/theos
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          echo "$THEOS/bin" >> "$GITHUB_PATH"
+
+      - name: Build Dobby static library for iOS arm64 (no code signing)
+        run: |
+          git clone --depth 1 https://github.com/jmpews/Dobby.git Dobby
+
+          cmake -S Dobby -B Dobby/build_ios \
+            -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_SYSTEM_PROCESSOR=arm64 \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY= \
+            -DDOBBY_DEBUG=OFF
+
+          # Build only the static target. The shared 'dobby' target is not needed
+          # and can make Xcode request an Apple Development Team for signing.
+          cmake --build Dobby/build_ios --config Release --target dobby_static
+
+          mkdir -p Dobby/lib
+          LIB_PATH="$(find Dobby/build_ios -type f -name 'libdobby.a' -print -quit)"
+          test -n "$LIB_PATH" || { echo 'libdobby.a was not produced'; exit 1; }
+          cp "$LIB_PATH" Dobby/lib/libdobby.a
+          test -f Dobby/include/dobby.h
+
+      - name: Compile tweak dylib (unsigned; ESign will sign after injection)
+        run: |
+          make clean
+          make all FINALPACKAGE=1 TARGET_CODESIGN=/usr/bin/true
+
+          DYLIB_PATH="$(find .theos/obj -type f -name 'AmongUsMod.dylib' -print -quit)"
+          test -n "$DYLIB_PATH" || { echo 'AmongUsMod.dylib was not produced'; find .theos -maxdepth 5 -type f; exit 1; }
+
+          mkdir -p dist
+          cp "$DYLIB_PATH" dist/AmongUsMod.dylib
+          xcrun lipo -info dist/AmongUsMod.dylib
+          file dist/AmongUsMod.dylib
+
+          cat > dist/README.txt <<'EOF'
+          Artifact: AmongUsMod.dylib
+          Target: iOS arm64
+          Signing: intentionally left unsigned for the IPA injection/signing step in ESign.
+          Dobby is linked statically into this dylib; libdobby.a is not a separate runtime dependency.
+
+          Important: this confirms the build artifact only. It does not confirm that the
+          game-specific UnityFramework offset or hook signature matches your installed
+          Among Us version. The supplied ESP feature is disabled because it is not implemented.
+          EOF
+
+      - name: Upload unsigned dylib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AmongUsMod-unsigned-iOS-arm64
+          path: dist/*
+          if-no-files-found: error
