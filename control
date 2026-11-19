@@ -1,0 +1,9 @@
+Package: com.yourname.amongusmod
+Name: AmongUsMod
+Depends: mobilesubstrate
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Mod Menu for Among Us
+Maintainer: YourName
+Author: YourName
+Section: Tweaks
